@@ -9,6 +9,7 @@ import numpy as np
 import rvc1_gt_loader
 import rvc1_submission_loader
 from coco_LRP import coco_LRP
+import pandas as pd
 
 # Input parameters
 parser = argparse.ArgumentParser(description='Perform PDQ, mAP, and moLRP evaluation on either coco or rvc1 data.')
@@ -37,6 +38,8 @@ parser.add_argument('--greedy_mode', action='store_true', help='This flag indica
                                                                'in a greedy fashion(assigned in order of highest pPDQ)')
 parser.add_argument('--prob_seg', action='store_true', help='this flag indicates that the detections are probabilistic'
                                                             'segmentations and are formatted as such')
+parser.add_argument('--name', default='', help='renames resulting files in this script using this name')
+
 args = parser.parse_args()
 
 # Define these before using this code
@@ -197,6 +200,10 @@ def main():
     # Save evaluation statistics to file
     with open(os.path.join(args.save_folder, 'scores.txt'), 'w') as output_file:
         output_file.write("\n".join("{0}:{1}".format(k, v) for k, v in sorted(result.items())))
+    
+    # Saving in CSV format for easier post analysis
+    saving_location = os.path.join('results', f'metrics_{args.name}.csv')
+    pd.DataFrame.from_dict({args.name: result}, orient='index').to_csv(saving_location)
 
     # Save pairwise PDQ statistics to file for use in visualisation code (separate file for each sequence)
     prev_idx = 0
@@ -205,9 +212,9 @@ def main():
         seq_det_eval_dicts = all_det_eval_dicts[prev_idx:prev_idx + len_sequence]
         prev_idx += len_sequence
 
-        with open(os.path.join(args.save_folder, 'gt_eval_stats_{:02d}.json'.format(idx)), 'w') as f:
+        with open(os.path.join(args.save_folder, f'gt_eval_stats_{args.name}_{idx:02d}.json'), 'w') as f:
             json.dump(seq_gt_eval_dicts, f)
-        with open(os.path.join(args.save_folder, 'det_eval_stats_{:02d}.json').format(idx), 'w') as f:
+        with open(os.path.join(args.save_folder, f'det_eval_stats_{args.name}_{idx:02d}.json'), 'w') as f:
             json.dump(seq_det_eval_dicts, f)
 
 
