@@ -87,6 +87,14 @@ RVC1 detections are saved in a single .json file per sequence being evaluated. E
 }
 ```
 
+ ### Important Notes ###
+ The two covariance matrices in `covars` need to be positive semi-definite in order for the code to work. A covariance matrix `C` is positive semi-definite when its eigenvalues are not negative. You can easily check this condition in python with the following function:
+
+ ```python
+ def is_pos_semidefinite(C):
+     return np.all(np.linalg.eigvals(C) >= 0)
+ ```
+
 ### Probabilistic Segmentation Detections ###
 We now accommodate a way to submit probabilistic segmentation detections.
 For this format, a .npy file for each image stores all detection probabilistic segmentation heatmaps for that image.
@@ -140,13 +148,13 @@ file_convert_coco_to_rvc1.py
  
  Also, by default, coco json format does not consider the existence of a covariance matrix which is needed for PDQ calculations. The conversion
  script assigns by default a zero'ed covariance matrix, but if a detection element in the coco json file (`det_json_file`) comes with a 
- key `covars`, the conversion script will use that covariance matrix instead of the default one with zeros. Please refer to the previous section RVC1 Detection Format for further information on how `covars` should be formatted in the json file.
+ key `covars`, the conversion script will use that covariance matrix instead of the default one with zeros. Please refer to the previous section `RVC1 Detection Format` for further information on how `covars` should be formatted in the json file.
  
 evaluate.py
 -----------
  To perform full evaluation simply run:
  
- `python evaluate.py --test_set <test_type> --gt_loc <gt_location> --det_loc <det_location> --save_folder <save_folder> --set_cov <cov>`
+ `python evaluate.py --test_set <test_type> --gt_loc <gt_location> --det_loc <det_location> --save_folder <save_folder> --set_cov <cov> --num_workers <num_workers>`
  
  Optional flags for new functionality include `--bbox_gt`, `--segment_mode`, `--greedy_mode`, and `--prob_seg`.
  There is also an `--mAP_heatmap` flag but that should not generally be used.
@@ -181,6 +189,8 @@ evaluate.py
  - `--mAP_heatmap` flag should not generally be used but enables mAP/moLRP evaluation to be based not upon corners
  defined by PBox/BBox detections, but that encompass all pixels of the detection above given threshold of probability 
  (0.0027). 
+
+ - `--num_workers` number of parallel worker processes to use in the CPU when making the calculations for the PDQ score. By default, this value is 6.
  
  For further details, please consult the code.
  
