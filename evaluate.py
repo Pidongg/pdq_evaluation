@@ -204,6 +204,7 @@ def main():
     
     # Saving in CSV format for easier post analysis
     saving_location = os.path.join('results', f'metrics_{args.name}.csv')
+    print(f'Saving {saving_location}...')
     pd.DataFrame.from_dict({args.name: result}, orient='index').to_csv(saving_location)
 
     # Save pairwise PDQ statistics to file for use in visualisation code (separate file for each sequence)
