@@ -5,13 +5,14 @@ System path must be appended to include location of PythonAPI.
 """
 
 import os
+import sys
+sys.path.append('..')
 from data_preparation import data_utils
 import numpy as np
 from data_holders import GroundTruthInstance, PBoxDetInst, BBoxDetInst, ProbSegDetInst
 import json
 import time
 from itertools import islice
-import sys
 import os.path as osp
 from PIL import Image
 
