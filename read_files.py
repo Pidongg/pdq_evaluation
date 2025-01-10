@@ -6,7 +6,8 @@ System path must be appended to include location of PythonAPI.
 
 import os
 import sys
-sys.path.append('..')
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 from data_preparation import data_utils
 import numpy as np
 from data_holders import GroundTruthInstance, PBoxDetInst, BBoxDetInst, ProbSegDetInst
@@ -88,6 +89,53 @@ def read_pbox_json(filename, gt_class_ids=None, get_img_names=False, get_class_n
     if get_class_names:
         return det_instances, data_dict['classes']
     return det_instances
+
+def convert_yolo_to_rvc(yolo_json_path, save_path, class_names):
+    """
+    Convert YOLO format detections from JSON to RVC format.
+    
+    Args:
+        yolo_json_path (str): Path to JSON file containing YOLO detections
+        save_path (str): Path to save the RVC format JSON
+        class_names (list): List of class names in order matching YOLO class indices
+        
+    The YOLO JSON should have format:
+    {
+        "image1.jpg": [[x1, y1, x2, y2, conf, class_id], ...],
+        "image2.jpg": [[x1, y1, x2, y2, conf, class_id], ...],
+        ...
+    }
+    
+    Returns:
+        None - saves the converted format to save_path
+    """
+    # Load YOLO format predictions
+    with open(yolo_json_path, 'r') as f:
+        yolo_preds = json.load(f)
+    
+    # Convert to RVC format
+    rvc_preds = {}
+    for image_name, detections in yolo_preds.items():
+        image_preds = []
+        for det in detections:
+            x1, y1, x2, y2, conf, class_id = det
+            w = x2 - x1
+            h = y2 - y1
+            
+            pred = {
+                "bbox": [float(x1), float(y1), float(w), float(h)],
+                "score": float(conf),
+                "category_id": int(class_id),
+                "category_name": class_names[int(class_id)]
+            }
+            image_preds.append(pred)
+        rvc_preds[image_name] = image_preds
+    
+    # Save RVC format predictions
+    with open(save_path, 'w') as f:
+        json.dump(rvc_preds, f, indent=2)
+    
+    print(f"Saved RVC format predictions to {save_path}")
 
 
 class BoxLoader:
