@@ -6,7 +6,9 @@ System path must be appended to include location of PythonAPI.
 
 import os
 import sys
-sys.path.append('..')
+# Add project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 from data_preparation import data_utils
 import numpy as np
 from data_holders import GroundTruthInstance, PBoxDetInst, BBoxDetInst, ProbSegDetInst

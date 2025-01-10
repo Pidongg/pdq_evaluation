@@ -13,7 +13,7 @@ import pandas as pd
 
 # Input parameters
 parser = argparse.ArgumentParser(description='Perform PDQ, mAP, and moLRP evaluation on either coco or rvc1 data.')
-parser.add_argument('--test_set', default='coco', choices=['coco', 'rvc1'],
+parser.add_argument('--test_set', default='coco', choices=['coco', 'rvc1', 'ultralytics_yolo'],
                     help='define if we are testing on coco or rvc1 data')
 parser.add_argument('--gt_loc', help='define where ground truth data (as folder of folders or as single file) is.'
                                      'This includes filename if ground truth is given as a file.'
@@ -48,6 +48,8 @@ if args.test_set == 'coco':
     coco_gt_file = args.gt_loc
 elif args.test_set == 'rvc1':
     rvc1_gt_folder = args.gt_loc
+elif args.test_set == 'ultralytics_yolo':
+    yolo_gt_folder = args.gt_loc
 
 
 class ParamSequenceHolder:
@@ -115,6 +117,16 @@ def gen_param_sequence():
                                                                    ["{0:06d}".format(idx) for idx in
                                                                     range(len(all_gt_instances))],
                                                                    override_cov=args.set_cov)
+
+    elif args.test_set == 'ultralytics_yolo':
+        gt_instances, gt_class_ids = read_files.read_labels_gt(yolo_gt_folder, ret_classes=True, bbox_gt=args.bbox_gt)
+        det_filename = args.det_loc
+
+        # output is a generator of lists of DetectionInstance objects (BBox or PBox depending on detection)
+        det_instances = read_files.read_pbox_json(det_filename, gt_class_ids, override_cov=args.set_cov,
+                                                  prob_seg=args.prob_seg)
+        all_gt_instances = [gt_instances]
+        all_det_instances = [det_instances]
 
     else:
         sys.exit("ERROR! Invalid test_set parameter (must be 'coco' or 'rvc1')")
