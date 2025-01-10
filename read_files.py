@@ -4,6 +4,8 @@ We require official COCO code to be downloaded and installed. Link to code: http
 System path must be appended to include location of PythonAPI.
 """
 
+import os
+from data_preparation import data_utils
 import numpy as np
 from data_holders import GroundTruthInstance, PBoxDetInst, BBoxDetInst, ProbSegDetInst
 import json
@@ -11,11 +13,7 @@ import time
 from itertools import islice
 import sys
 import os.path as osp
-
-# Temp way to get access to COCO code for now
-sys.path.append('./cocoapi/PythonAPI/')
-from pycocotools.coco import COCO
-
+from PIL import Image
 
 def read_pbox_json(filename, gt_class_ids=None, get_img_names=False, get_class_names=False, n_imgs=None,
                    override_cov=None, label_threshold=0, prob_seg=False):
@@ -191,138 +189,107 @@ class ProbSegmentLoader:
             ]
 
 
-def read_COCO_gt(filename, n_imgs=None, ret_img_sizes=False, ret_classes=False, bbox_gt=False):
+def read_labels_gt(test_labels, segmentation_dir, n_imgs=None, ret_img_sizes=False, ret_classes=False, bbox_gt=False):
     """
-    Function for reading COCO ground-truth files and converting them to GroundTruthInstances format.
-    :param filename: filename of the annotation.json file with all COCO ground-truth annotations
-    :param n_imgs: number of images ground-truth is being extracted from. If None extract all (default None)
-    :param ret_img_sizes: Boolean flag dictating if the image sizes should be returned
-    :param ret_classes: Boolean flag dictating if the class mapping dictionary should be returned
-    :param bbox_gt: Boolean flag dictating if the GroundTruthInstance should ignore the segmentation mask and only use
-    bounding box information.
-    :return: ground-truth instances as GTLoader and optionally image sizes or class mapping dictionary if requested
+    Function for reading label files and converting them to GroundTruthInstances format.
+    
+    Args:
+        test_labels: Directory containing label files or list of label file paths
+        segmentation_dir: Directory containing segmentation mask images
+        n_imgs: Number of image tiles ground-truth is being extracted from. If None extract all
+        ret_img_sizes: Boolean flag dictating if the image sizes should be returned
+        ret_classes: Boolean flag dictating if the class mapping dictionary should be returned
+        bbox_gt: Boolean flag dictating if the GroundTruthInstance should ignore the segmentation mask 
+                and only use bounding box information. # TODO: this functionality is not yet implemented
+    
+    Returns:
+        ground-truth instances as GTLoader and optionally image sizes or class mapping dictionary if requested
     """
-
-    # read the json file
-    coco_obj = COCO(filename)
-
-    gt_instances = GTLoader(coco_obj, n_imgs, bbox_gt=bbox_gt)
+    # Create GTLoader instance
+    gt_instances = GTLoader(test_labels, segmentation_dir, n_imgs, bbox_gt=bbox_gt)
 
     # Return image sizes if requested
     if ret_img_sizes:
-        return gt_instances, [
-            [coco_obj.imgs[img_id]['height'], coco_obj.imgs[img_id]['width']]
-            for img_id in sorted(coco_obj.imgs.keys())
-        ]
+        # Get first image size to determine dimensions
+        # Note: Assumes all images have same dimensions
+        first_mask = os.path.join(segmentation_dir, os.path.basename(gt_instances.test_labels[0]).replace('.txt', '-labelled.png'))
+        img = Image.open(first_mask)
+        img_size = [img.height, img.width]
+        return gt_instances, [img_size for _ in range(len(gt_instances))]
 
     # Return class mapping dictionary if requested
     if ret_classes:
-        return gt_instances, {
-            coco_obj.cats[cat_id]['name']: idx
-            for idx, cat_id in enumerate(sorted(coco_obj.cats.keys()))
-        }
+        # For our case, classes are 0-3 representing the 4 possible classes
+        return gt_instances, {str(i): i for i in range(4)}
+        
     return gt_instances
 
 
 class GTLoader:
-
-    def __init__(self, coco_obj, n_imgs, bbox_gt=False):
+    def __init__(self, test_labels, segmentation_dir, n_imgs=None, bbox_gt=False):
         """
-        Initialisation function for GTLoader object which loads ground-truth annotations from COCO and
-        produces GroundTruthInstance objects.
-        :param coco_obj: ground-truth object for all images in COCO annotation format
-        :param n_imgs: number of images ground-truth is being extracted from. If None extract all
+        Initialisation function for GTLoader object which loads ground-truth annotations from label files
+        and produces GroundTruthInstance objects.
+        
+        Args:
+            test_labels: Directory containing label files or list of label file paths
+            segmentation_dir: Directory containing segmentation mask images
+            n_imgs: Number of image tiles ground-truth is being extracted from. If None extract all
+            bbox_gt: Boolean flag dictating if the GroundTruthInstance should ignore the segmentation mask 
+                    and only use bounding box information
         """
-        self.coco_obj = coco_obj
+        self.test_labels = (test_labels if isinstance(test_labels, list) 
+                          else data_utils.list_files_of_a_type(test_labels, ".txt", recursive=True))
+        self.segmentation_dir = segmentation_dir
         self.n_imgs = n_imgs
         self.bbox_gt = bbox_gt
 
     def __len__(self):
-        return len(self.coco_obj.imgs) if self.n_imgs is None else self.n_imgs
+        return len(self.test_labels) if self.n_imgs is None else self.n_imgs
 
     def __iter__(self):
-        coco_annotations = self.coco_obj.imgToAnns
-        img_ids = sorted(self.coco_obj.imgs.keys())
-
-        # Create map to transfer from category id to index id (used as class id in our tests)
-        ann_idx_map = {
-            cat_id: idx
-            for idx, cat_id in enumerate(sorted(self.coco_obj.cats.keys()))
-        }
-
-        if self.n_imgs is not None:
-            img_id_iter = islice(img_ids, 0, self.n_imgs)
-        else:
-            img_id_iter = iter(img_ids)
-        for img_idx, img_id in enumerate(img_id_iter):
-            if img_id not in coco_annotations.keys():
-                yield []
-            else:
-                # load the annotations available for the given image
-                # filter out any annotations which do not have segmentations
-                for annotation in coco_annotations[img_id]:
-                    if "segmentation" not in annotation.keys():
-                        print("SKIPPED A GT OBJECT!")
-                img_annotations = [
-                    annotation
-                    for annotation in coco_annotations[img_id]
-                    if 'segmentation' in annotation.keys()
-                ]
-                # extract the class ids for each annotation (note that we subtract 1 so that class ids start at 0)
-                class_ids = [annotation['category_id'] for annotation in img_annotations]
-                bboxes = []
-                seg_masks = []
-                ignores = [annotation['ignore'] if 'ignore' in annotation.keys() else False
-                           for annotation in img_annotations]
-                iscrowds = [annotation['iscrowd'] for annotation in img_annotations]
-                areas = [annotation['area'] for annotation in img_annotations]
-
-                for annotation in img_annotations:
-                    # transform bbox to [x1, y1, x2, y2]
-                    box = annotation['bbox']
-                    box[2] += box[0]
-                    box[3] += box[1]
-                    bboxes.append(box)
-
-                    # define GT segmentation mask
-                    # If segmentation mask is expected to be pixels within bounding box, adjust accordingly
-                    seg_mask = self.coco_obj.annToMask(annotation)
-                    if self.bbox_gt:
-                        eval_mask = np.zeros(seg_mask.shape, dtype=np.bool)
-
-                        # Use the COCO bounding box (note not exact around segmentation masks)
-                        # Round down for lower bounds and round up for upper bounds to accommodate floats
-                        seg_bbox = np.floor(box).astype(np.int)
-                        seg_bbox[-2:] = np.ceil(box[-2:]).astype(np.int)
-
-                        # clamp box to image size to make sure not outside extremes
-                        seg_bbox = clamp_bbox(seg_bbox, eval_mask.shape)
-
-                        # Create segmentation mask with bounding box
-                        eval_mask[seg_bbox[1]:seg_bbox[3]+1, seg_bbox[0]:seg_bbox[2]+1] = True
-
-                        # Below use seg_bbox for simplicity rather than trying to account for rounding in box
-                        # (USED IN REBUTTAL)
-                        # seg_bbox = generate_bounding_box_from_mask(seg_mask)
-                        # eval_mask[seg_bbox[1]:seg_bbox[3]+1, seg_bbox[0]:seg_bbox[2]+1] = True
-
-                        seg_masks.append(eval_mask)
-                    else:
-                        seg_masks.append(seg_mask)
-
-                # generate ground truth instances from the COCO annotation information
-                # NOTE this will skip any annotation which has a bad segmentation mask (all zeros)
-                yield [
-                    GroundTruthInstance(
-                        segmentation_mask=seg_masks[ann_idx],
-                        true_class_label=ann_idx_map[class_ids[ann_idx]],
-                        coco_bounding_box=bboxes[ann_idx],
-                        coco_ignore=ignores[ann_idx],
-                        coco_iscrowd=iscrowds[ann_idx],
-                        coco_area=areas[ann_idx]
-                        )
-                    for ann_idx in range(len(img_annotations)) if np.amax(seg_masks[ann_idx] > 0)
-                ]
+        """
+        Iterator that yields ground truth instances for each image.
+        Each iteration returns a list of GroundTruthInstance objects for one image.
+        """
+        from data_preparation.image_labelling import bboxes_from_yolo_labels
+        from evaluation.pdq_utils import compute_segmentation_mask_for_bbox
+        
+        # Limit number of images if specified
+        label_files = self.test_labels[:self.n_imgs] if self.n_imgs is not None else self.test_labels
+        
+        for label_file in label_files:
+            # Get corresponding segmentation mask path
+            base_name = os.path.basename(label_file)
+            base_name_no_ext = os.path.splitext(base_name)[0]
+            seg_mask_path = os.path.join(
+                self.segmentation_dir,
+                base_name_no_ext + "-labelled.png"
+            )
+            
+            # Read bounding boxes and labels from the label file
+            bboxes, labels = bboxes_from_yolo_labels(label_file)
+            
+            # Create ground truth instances for this image
+            gt_instances = []
+            for bbox, label in zip(bboxes, labels):
+                x1, y1, x2, y2 = bbox
+                
+                # Get segmentation mask for this bbox
+                segmentation_mask = compute_segmentation_mask_for_bbox(
+                    x1, y1, x2, y2, 
+                    seg_mask_path
+                )
+                
+                # Create GroundTruthInstance
+                gt_instance = GroundTruthInstance(
+                    segmentation_mask=segmentation_mask,
+                    true_class_label=label,
+                    coco_bounding_box=[x1, y1, x2, y2]
+                )
+                gt_instances.append(gt_instance)
+                
+            yield gt_instances
 
 
 def convert_coco_det_to_rvc_det(det_filename, gt_filename, save_filename):
@@ -333,8 +300,6 @@ def convert_coco_det_to_rvc_det(det_filename, gt_filename, save_filename):
     :param save_filename: filename where detections in RVC1 format will be saved
     :return: None
     """
-    coco_obj = COCO(gt_filename)
-
     with open(det_filename, 'r') as fp:
         det_coco_dicts = json.load(fp)
 
