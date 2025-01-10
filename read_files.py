@@ -6,6 +6,10 @@ System path must be appended to include location of PythonAPI.
 
 import os
 import sys
+<<<<<<< HEAD
+=======
+# Add project root to Python path
+>>>>>>> 7585b51c9264c7539902b8faa9f2fdf3d77a5808
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 from data_preparation import data_utils
