@@ -2,6 +2,7 @@ import read_files
 import argparse
 import os
 import sys
+import importlib
 from pdq import PDQ
 from coco_mAP import coco_mAP
 import json
@@ -13,11 +14,12 @@ import pandas as pd
 
 # Input parameters
 parser = argparse.ArgumentParser(description='Perform PDQ, mAP, and moLRP evaluation on either coco or rvc1 data.')
-parser.add_argument('--test_set', default='coco', choices=['coco', 'rvc1', 'ultralytics_yolo'],
+parser.add_argument('--test_set', default='coco', choices=['coco', 'rvc1', 'tau_histopathology'],
                     help='define if we are testing on coco or rvc1 data')
 parser.add_argument('--gt_loc', help='define where ground truth data (as folder of folders or as single file) is.'
                                      'This includes filename if ground truth is given as a file.'
                                      'Will only be treated as a file if test_set is coco')
+parser.add_argument('--segmentation_dir', default=None, help='directory containing segmentation masks for YOLO format')
 parser.add_argument('--det_loc', help='define where detection (as folder of .json files or single file) is.'
                                       'This includes filename if ground truth is given as a file.'
                                       'Will only be treated as a file if test_set is coco')
@@ -39,7 +41,6 @@ parser.add_argument('--greedy_mode', action='store_true', help='This flag indica
 parser.add_argument('--prob_seg', action='store_true', help='this flag indicates that the detections are probabilistic'
                                                             'segmentations and are formatted as such')
 parser.add_argument('--name', default='', help='renames resulting files in this script using this name')
-parser.add_argument('--num_workers', default=6, type=int, help='Number of worker processes in CPU when calculating the PDQ score')
 
 args = parser.parse_args()
 
@@ -48,7 +49,7 @@ if args.test_set == 'coco':
     coco_gt_file = args.gt_loc
 elif args.test_set == 'rvc1':
     rvc1_gt_folder = args.gt_loc
-elif args.test_set == 'ultralytics_yolo':
+elif args.test_set == 'tau_histopathology':
     yolo_gt_folder = args.gt_loc
 
 
@@ -118,8 +119,14 @@ def gen_param_sequence():
                                                                     range(len(all_gt_instances))],
                                                                    override_cov=args.set_cov)
 
-    elif args.test_set == 'ultralytics_yolo':
-        gt_instances, gt_class_ids = read_files.read_labels_gt(yolo_gt_folder, ret_classes=True, bbox_gt=args.bbox_gt)
+    elif args.test_set == 'tau_histopathology':
+        gt_instances, gt_class_ids = read_files.read_tau_histopathology_gt(
+            yolo_gt_folder, 
+            segmentation_dir=args.segmentation_dir,
+            ret_classes=True, 
+            bbox_gt=args.bbox_gt,
+            predictions_json=args.det_loc.replace('rvc','yolo')
+        )
         det_filename = args.det_loc
 
         # output is a generator of lists of DetectionInstance objects (BBox or PBox depending on detection)
@@ -138,17 +145,23 @@ def gen_param_sequence():
 
 
 def main():
+    # Remove multiprocessing start method setup
+    # if torch.cuda.is_available():
+    #     import multiprocessing
+    #     multiprocessing.set_start_method('spawn', force=True)
+    importlib.invalidate_caches()  # Clear any import caches
+
     if not os.path.isdir(args.save_folder):
         os.makedirs(args.save_folder)
 
-    print("Extracting GT and Detections")
+    print("Extracting GT and Detections for PDQ calculation")
     param_sequence, len_sequences = gen_param_sequence()
 
     print("Calculating PDQ")
 
     # Get summary statistics (PDQ, avg_qualities)
     evaluator = PDQ(filter_gts=(args.test_set == 'rvc1'), segment_mode=args.segment_mode, greedy_mode=args.greedy_mode)
-    pdq = evaluator.score(param_sequence, num_workers=args.num_workers)
+    pdq = evaluator.score(param_sequence)
     TP, FP, FN = evaluator.get_assignment_counts()
     avg_spatial_quality = evaluator.get_avg_spatial_score()
     avg_label_quality = evaluator.get_avg_label_score()
@@ -162,8 +175,8 @@ def main():
 
     # Calculate mAP
     print("Calculating mAP")
-    # generate the parameter sequence again for new tests (generator does not hold onto data once used)
-    print("Extracting GT and Detections")
+    # Force regenerate the parameter sequence with fresh data
+    print("Extracting GT and Detections for mAP calculation")
     param_sequence, len_sequences = gen_param_sequence()
     if args.mAP_heatmap:
         mAP = coco_mAP(param_sequence, use_heatmap=True)
@@ -174,8 +187,8 @@ def main():
 
     # Calculate LRP
     print("Calculating LRP")
-    # generate the parameter sequence again for new tests (generator does not hold onto data once used)
-    print("Extracting GT and Detections")
+    # Force regenerate the parameter sequence with fresh data
+    print("Extracting GT and Detections for LRP calculation")
     param_sequence, len_sequences = gen_param_sequence()
     # Use same BBox definition as would be used for mAP
     # Extract all moLRP statistics        

@@ -1,18 +1,9 @@
 """
-Any time COCO data is read, we convert to GroundTruthInstances and DetectionInstances.
-We require official COCO code to be downloaded and installed. Link to code: https://github.com/cocodataset/cocoapi
-System path must be appended to include location of PythonAPI.
+Any time ground truth labels or detections for tau histopathology dataset is read, we convert to GroundTruthInstances and DetectionInstances.
 """
 
 import os
 import sys
-<<<<<<< HEAD
-=======
-# Add project root to Python path
->>>>>>> 7585b51c9264c7539902b8faa9f2fdf3d77a5808
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(project_root)
-from data_preparation import data_utils
 import numpy as np
 from data_holders import GroundTruthInstance, PBoxDetInst, BBoxDetInst, ProbSegDetInst
 import json
@@ -20,6 +11,14 @@ import time
 from itertools import islice
 import os.path as osp
 from PIL import Image
+from data_preparation.image_labelling import bboxes_from_yolo_labels
+import cv2
+import torch
+import matplotlib.pyplot as plt
+
+# Commented out since we don't use COCO dataset for our tau histopathology project.
+# sys.path.append('./cocoapi/PythonAPI/')
+# from pycocotools.coco import COCO
 
 def read_pbox_json(filename, gt_class_ids=None, get_img_names=False, get_class_names=False, n_imgs=None,
                    override_cov=None, label_threshold=0, prob_seg=False):
@@ -50,7 +49,6 @@ def read_pbox_json(filename, gt_class_ids=None, get_img_names=False, get_class_n
     # Read data from json file
     with open(filename, 'r') as f:
         data_dict = json.load(f)
-
     # Associate detection classes to ground truth classes, to get the order right (for evaluation)
     # format: class_association[det_idx] = gt_idx
     class_association = {}
@@ -94,52 +92,80 @@ def read_pbox_json(filename, gt_class_ids=None, get_img_names=False, get_class_n
         return det_instances, data_dict['classes']
     return det_instances
 
-def convert_yolo_to_rvc(yolo_json_path, save_path, class_names):
+def get_ordered_paths_from_predictions(predictions_json_path):
     """
-    Convert YOLO format detections from JSON to RVC format.
+    Extract ordered image paths from YOLO predictions JSON file and convert to label paths.
+    Constructs full label paths by adding labels_root prefix and proper directory structure.
     
     Args:
-        yolo_json_path (str): Path to JSON file containing YOLO detections
-        save_path (str): Path to save the RVC format JSON
-        class_names (list): List of class names in order matching YOLO class indices
+        predictions_json_path: Path to the YOLO predictions JSON file
+        labels_root: Root directory containing label files (default: "labels/test")
         
-    The YOLO JSON should have format:
-    {
-        "image1.jpg": [[x1, y1, x2, y2, conf, class_id], ...],
-        "image2.jpg": [[x1, y1, x2, y2, conf, class_id], ...],
-        ...
-    }
-    
     Returns:
-        None - saves the converted format to save_path
+        List of label paths in the order they appear in predictions JSON
     """
-    # Load YOLO format predictions
-    with open(yolo_json_path, 'r') as f:
-        yolo_preds = json.load(f)
+    with open(predictions_json_path, 'r') as f:
+        predictions = json.load(f)
     
-    # Convert to RVC format
-    rvc_preds = {}
-    for image_name, detections in yolo_preds.items():
-        image_preds = []
-        for det in detections:
-            x1, y1, x2, y2, conf, class_id = det
-            w = x2 - x1
-            h = y2 - y1
+    # Get sorted image paths from predictions
+    image_paths = sorted(predictions.keys())
+
+    
+    # Convert image paths to label paths
+    label_paths = []
+    for img_path in image_paths:
+        # Extract the sequence number (e.g., "703488")
+        seq_num = (img_path.split()[0]).split('.')[0].split('[')[0].split('/')[0]
+        
+        # Construct label path with single directory level
+        label_path = os.path.join(seq_num, img_path.replace('.png', '.txt').split('/')[-1])
+        label_paths.append(label_path)
+
+    return label_paths
+
+def convert_tau_histopathology_to_rvc(original_predictions_path, rvc_json_path, class_names):
+    """Convert tau histopathology predictions format to RVC1 format"""
+    try:
+        with open(original_predictions_path, 'r') as f:
+            preds = json.load(f)
+        rvc_dets = []
+        img_list = sorted(preds.keys())
+        for img_path in img_list:
+            predictions = preds[img_path]
+            img_dets = []
+            for pred in predictions:
+                x1, y1, x2, y2 = pred['boxes']
+                conf = pred['conf']
+                cls_id = pred['cls_id']
+                class_confs = pred.get('class_confs', None)
+                covars = pred.get('covars', [[[0, 0], [0, 0]], [[0, 0], [0, 0]]])
+                if covars is None:
+                    covars = [[[0, 0], [0, 0]], [[0, 0], [0, 0]]]
+                if class_confs is None:
+                    class_confs = np.ones(len(class_names)) * ((1 - conf) / (len(class_names) - 1))
+                    class_confs[int(cls_id)] = conf
+                
+                # Create detection entry in RVC1 format
+                det_dict = {
+                    'bbox': [float(x1), float(y1), float(x2), float(y2)],
+                    'covars': covars,
+                    'label_probs': class_confs
+                }
+                img_dets.append(det_dict)
+            rvc_dets.append(img_dets)
+        
+        # Create final RVC1 format dictionary
+        rvc_dict = {
+            'classes': list(map(str, class_names.keys())) if isinstance(class_names, dict) else class_names,
+            'detections': rvc_dets
+        }
+        
+        # Save to JSON
+        with open(rvc_json_path, 'w') as f:
+            json.dump(rvc_dict, f)
             
-            pred = {
-                "bbox": [float(x1), float(y1), float(w), float(h)],
-                "score": float(conf),
-                "category_id": int(class_id),
-                "category_name": class_names[int(class_id)]
-            }
-            image_preds.append(pred)
-        rvc_preds[image_name] = image_preds
-    
-    # Save RVC format predictions
-    with open(save_path, 'w') as f:
-        json.dump(rvc_preds, f, indent=2)
-    
-    print(f"Saved RVC format predictions to {save_path}")
+    except Exception as e:
+        print(f"Error converting predictions to RVC format: {e}")
 
 
 class BoxLoader:
@@ -242,47 +268,53 @@ class ProbSegmentLoader:
             ]
 
 
-def read_labels_gt(test_labels, segmentation_dir, n_imgs=None, ret_img_sizes=False, ret_classes=False, bbox_gt=False):
+def read_tau_histopathology_gt(test_labels, segmentation_dir, predictions_json=None, n_imgs=None, ret_img_sizes=False, ret_classes=False, bbox_gt=False):
     """
     Function for reading label files and converting them to GroundTruthInstances format.
     
     Args:
         test_labels: Directory containing label files or list of label file paths
-        segmentation_dir: Directory containing segmentation mask images
-        n_imgs: Number of image tiles ground-truth is being extracted from. If None extract all
-        ret_img_sizes: Boolean flag dictating if the image sizes should be returned
-        ret_classes: Boolean flag dictating if the class mapping dictionary should be returned
-        bbox_gt: Boolean flag dictating if the GroundTruthInstance should ignore the segmentation mask 
-                and only use bounding box information. # TODO: this functionality is not yet implemented
-    
-    Returns:
-        ground-truth instances as GTLoader and optionally image sizes or class mapping dictionary if requested
+        segmentation_dir: Root directory containing segmentation mask images
+        predictions_json: Path to predictions JSON file to ensure matching order (optional)
+        n_imgs: Number of image tiles ground-truth is being extracted from
+        ret_img_sizes: Boolean flag dictating if image sizes should be returned
+        ret_classes: Boolean flag dictating if class mapping dictionary should be returned
+        bbox_gt: Boolean flag dictating if GroundTruthInstance should only use bbox information
     """
-    # Create GTLoader instance
-    gt_instances = GTLoader(test_labels, segmentation_dir, n_imgs, bbox_gt=bbox_gt)
+    ordered_paths = get_ordered_paths_from_predictions(predictions_json)
+    # Convert relative paths to full paths
+    if isinstance(test_labels, str):
+        ordered_paths = [os.path.join(test_labels, p) for p in ordered_paths]
+            
+    # Verify all paths exist
+    for path in ordered_paths:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Label file not found: {path}")
+                
+    gt_instances = TauHistopathologyGTLoader(ordered_paths, segmentation_dir, n_imgs, bbox_gt=bbox_gt)
 
     # Return image sizes if requested
     if ret_img_sizes:
         # Get first image size to determine dimensions
         # Note: Assumes all images have same dimensions
-        first_mask = os.path.join(segmentation_dir, os.path.basename(gt_instances.test_labels[0]).replace('.txt', '-labelled.png'))
+        first_label = gt_instances.test_labels[0]
+        first_mask = gt_instances._get_segmentation_path(first_label)
         img = Image.open(first_mask)
         img_size = [img.height, img.width]
         return gt_instances, [img_size for _ in range(len(gt_instances))]
 
     # Return class mapping dictionary if requested
     if ret_classes:
-        # For our case, classes are 0-3 representing the 4 possible classes
         return gt_instances, {str(i): i for i in range(4)}
         
     return gt_instances
 
 
-class GTLoader:
+class TauHistopathologyGTLoader:
     def __init__(self, test_labels, segmentation_dir, n_imgs=None, bbox_gt=False):
         """
-        Initialisation function for GTLoader object which loads ground-truth annotations from label files
-        and produces GroundTruthInstance objects.
+        Initialisation function for TauHistopathologyGTLoader object which loads ground-truth annotations from label files
+        and produces GroundTruthInstance objects for tau histopathology dataset.
         
         Args:
             test_labels: Directory containing label files or list of label file paths
@@ -291,34 +323,174 @@ class GTLoader:
             bbox_gt: Boolean flag dictating if the GroundTruthInstance should ignore the segmentation mask 
                     and only use bounding box information
         """
-        self.test_labels = (test_labels if isinstance(test_labels, list) 
-                          else data_utils.list_files_of_a_type(test_labels, ".txt", recursive=True))
         self.segmentation_dir = segmentation_dir
         self.n_imgs = n_imgs
         self.bbox_gt = bbox_gt
+        self.test_labels = test_labels
+        
+        self.label_paths_order = []
+        for _, path in enumerate(self.test_labels):
+            self.label_paths_order.append(path)
 
     def __len__(self):
         return len(self.test_labels) if self.n_imgs is None else self.n_imgs
+
+    def __compute_segmentation_mask_for_bbox(x1, y1, x2, y2, segmentation_img_path):
+        """Extract segmentation mask for a given bounding box.
+        
+        Args:
+            x1, y1, x2, y2 (float): Bounding box coordinates
+            segmentation_img_path (str): Path to segmentation mask image
+            
+        Returns:
+            np.ndarray: Binary segmentation mask with same size as input image,
+                    where regions outside bbox are set to 0
+        """
+        # Read segmentation mask and ensure it's a CPU numpy array
+        seg_img = cv2.imread(str(segmentation_img_path), cv2.IMREAD_GRAYSCALE)
+        if seg_img is None:
+            raise ValueError(f"Could not read segmentation mask: {segmentation_img_path}")
+        
+        # Convert coordinates to numpy if they're tensors
+        if torch.is_tensor(x1):
+            x1 = x1.cpu().numpy()
+        if torch.is_tensor(y1):
+            y1 = y1.cpu().numpy()
+        if torch.is_tensor(x2):
+            x2 = x2.cpu().numpy()
+        if torch.is_tensor(y2):
+            y2 = y2.cpu().numpy()
+        
+        # Create empty mask of same size
+        full_mask = np.zeros_like(seg_img)
+        
+        # Round coordinates to ensure we capture the full region
+        x1_idx = int(np.floor(x1))
+        y1_idx = int(np.floor(y1))
+        x2_idx = int(np.ceil(x2)) +1
+        y2_idx = int(np.ceil(y2)) +1
+        
+        # Ensure indices are within image bounds
+        height, width = seg_img.shape
+        x2_idx = min(width, x2_idx)
+        y2_idx = min(height, y2_idx)
+        
+        # Extract bbox region and place it in the full mask
+        bbox_region = seg_img[y1_idx:y2_idx, x1_idx:x2_idx]
+        
+        if bbox_region.size == 0 or np.all(bbox_region == 0):
+            raise ValueError(
+                f"Ground truth instance must have non-zero segmentation mask within its bounding box. "
+                f"Check the segmentation mask at {segmentation_img_path} for bbox coordinates "
+                f"[{x1}, {y1}, {x2}, {y2}] (indexed as [{x1_idx}, {y1_idx}, {x2_idx}, {y2_idx}])"
+                f"height: {height}, width: {width}"
+            )
+        
+        full_mask[y1_idx:y2_idx, x1_idx:x2_idx] = bbox_region
+        return full_mask
+
+    def __visualize_segmentation(image_path, segmentation_mask, bbox, save_path=None):
+        """
+        Visualize segmentation mask overlaid on original image
+        
+        Args:
+            image_path (str): Path to original image
+            segmentation_mask (np.ndarray): Binary segmentation mask
+            bbox (list): [x0, y0, x1, y1] coordinates
+            save_path (str, optional): Path to save visualization
+        """
+        # Check if segmentation mask is valid
+        if segmentation_mask is None or segmentation_mask.size == 0:
+            print(f"Warning: Empty or invalid segmentation mask")
+            return
+            
+        # Read original image
+        image = cv2.imread(str(image_path))
+        if image is None:
+            raise ValueError(f"Could not read image: {image_path}")
+        
+        # Convert BGR to RGB
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Create overlay
+        overlay = image.copy()
+        
+        # Convert bbox coordinates to integers
+        x0, y0, x1, y1 = map(int, bbox)
+        
+        # Extract region from image
+        region = image[y0:y1, x0:x1]
+        
+        # Crop segmentation mask to match region size
+        mask_cropped = segmentation_mask[y0:y1, x0:x1]
+        
+        # Create red overlay for the region
+        mask_overlay = np.zeros_like(region)
+        mask_overlay[mask_cropped > 0] = [255, 0, 0]  # Red color for mask
+        
+        try:
+            # Blend mask with region
+            region_overlay = cv2.addWeighted(
+                region,
+                0.5,  # alpha
+                mask_overlay,
+                0.5,  # beta = 1-alpha
+                0     # gamma
+            )
+            
+            # Place the overlay back into the full image
+            overlay[y0:y1, x0:x1] = region_overlay
+        except Exception as e:
+            print(f"Warning: Segmentation mask shape {segmentation_mask.shape} doesn't match region shape {region.shape}")
+            return
+        
+        # Draw bounding box
+        cv2.rectangle(overlay, (x0, y0), (x1, y1), (0, 255, 0), 2)
+        
+        # Display
+        plt.figure(figsize=(10, 10))
+        plt.imshow(overlay)
+        plt.axis('off')
+        
+        if save_path:
+            plt.savefig(save_path, bbox_inches='tight', pad_inches=0)
+        plt.show()
+
+    def _get_segmentation_path(self, label_file):
+        """
+        Get the corresponding segmentation mask path for a label file.
+        Maintains the same directory structure as the label file.
+        
+        Args:
+            label_file: Path to the label file
+            
+        Returns:
+            Path to the corresponding segmentation mask
+        """
+        # Get relative path from label file
+        if isinstance(self.test_labels, list):
+            rel_path = os.path.relpath(label_file, os.path.commonpath(self.test_labels))
+        else:
+            rel_path = os.path.relpath(label_file, self.test_labels)
+            
+        # Convert label path to segmentation path
+        rel_dir = os.path.dirname(rel_path)
+        base_name = os.path.splitext(os.path.basename(label_file))[0]
+        seg_name = base_name + "-labelled.png"
+        
+        # Construct full segmentation path
+        return os.path.join(self.segmentation_dir, rel_dir, seg_name)
 
     def __iter__(self):
         """
         Iterator that yields ground truth instances for each image.
         Each iteration returns a list of GroundTruthInstance objects for one image.
         """
-        from data_preparation.image_labelling import bboxes_from_yolo_labels
-        from evaluation.pdq_utils import compute_segmentation_mask_for_bbox
-        
-        # Limit number of images if specified
         label_files = self.test_labels[:self.n_imgs] if self.n_imgs is not None else self.test_labels
         
         for label_file in label_files:
             # Get corresponding segmentation mask path
-            base_name = os.path.basename(label_file)
-            base_name_no_ext = os.path.splitext(base_name)[0]
-            seg_mask_path = os.path.join(
-                self.segmentation_dir,
-                base_name_no_ext + "-labelled.png"
-            )
+            seg_mask_path = self._get_segmentation_path(label_file)
             
             # Read bounding boxes and labels from the label file
             bboxes, labels = bboxes_from_yolo_labels(label_file)
@@ -329,7 +501,7 @@ class GTLoader:
                 x1, y1, x2, y2 = bbox
                 
                 # Get segmentation mask for this bbox
-                segmentation_mask = compute_segmentation_mask_for_bbox(
+                segmentation_mask = self.__compute_segmentation_mask_for_bbox(
                     x1, y1, x2, y2, 
                     seg_mask_path
                 )
@@ -353,6 +525,7 @@ def convert_coco_det_to_rvc_det(det_filename, gt_filename, save_filename):
     :param save_filename: filename where detections in RVC1 format will be saved
     :return: None
     """
+    coco_obj = COCO(gt_filename)
     with open(det_filename, 'r') as fp:
         det_coco_dicts = json.load(fp)
 

@@ -45,6 +45,31 @@ _BG_CLASS_NAMES = ['background', '__background__', '__bg__', 'none']
 # Set a font size for text in boxes
 _FONTSIZE = 16
 
+def validate_covariance(cov):
+    """
+    Validates if a covariance matrix is valid (symmetric positive semi-definite and reasonable values)
+    """
+    # Convert to numpy array if it isn't already
+    if not isinstance(cov, np.ndarray):
+        cov = np.array(cov, dtype=np.float32)
+    
+    if cov.shape != (2, 2):
+        return False, f"Invalid shape: {cov.shape}, expected (2,2)"
+        
+    # Check if symmetric
+    if not np.allclose(cov, cov.T):
+        return False, "Covariance matrix is not symmetric"
+        
+    # Check if positive semi-definite
+    eigenvals = np.linalg.eigvals(cov)
+    if not np.all(eigenvals >= -1e-10):  # Allow for minor numerical errors
+        return False, f"Not positive semi-definite. Eigenvalues: {eigenvals}"
+        
+    # Check for unreasonably large values
+    if np.any(np.abs(cov) > 1e4):
+        return False, f"Contains unusually large values: {cov}"
+        
+    return True, "Valid"
 
 def save_detection_img(img_name, img_dets, class_list, save_folder, corner_mode):
     """
@@ -81,6 +106,17 @@ def save_detection_img(img_name, img_dets, class_list, save_folder, corner_mode)
     for det_idx, det_inst in enumerate(img_dets):
 
         det_box = det_inst.box
+
+        # Validate covariances if present
+        if isinstance(det_inst, PBoxDetInst):
+            det_covs = det_inst.covs
+            for corner_idx, cov in enumerate(det_covs):
+                is_valid, message = validate_covariance(cov)
+                if not is_valid:
+                    print(f"Warning: Invalid covariance in detection {det_idx}, corner {corner_idx}")
+                    print(f"Box coordinates: {det_box}")
+                    print(f"Covariance:\n{cov}")
+                    print(f"Reason: {message}\n")
 
         # display based on max non-none class and confidence thereof
         max_class_id = np.argmax(det_inst.class_list)
@@ -120,7 +156,14 @@ def main():
                                                           override_cov=args.set_cov,
                                                           get_class_names=True)
     
-    all_images = sorted(glob.glob(os.path.join(args.gt_img_folder, '*.'+args.img_type)))
+    # Recursively find all images in subfolders
+    all_images = []
+    for root, _, files in os.walk(args.gt_img_folder):
+        for file in files:
+            if file.endswith('.' + args.img_type):
+                all_images.append(os.path.join(root, file))
+    all_images = sorted(all_images)
+
     if len(all_images) != len(det_instances):
         sys.exit("ERROR! Ground truth images (--gt_img_folder) and det_instances are not the same length."
                  "\ngt_img_folder: {0}, det_instances: {1}".format(len(all_images), len(det_instances)))

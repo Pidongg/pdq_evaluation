@@ -19,7 +19,7 @@ from tqdm import tqdm
 # Input parameters
 parser = argparse.ArgumentParser(description='Visualise probabilistic detections and PDQ analysis for a single '
                                              'sequence of images.')
-parser.add_argument('--data_type', choices=['coco', 'rvc1'], help='type of data being evaluated')
+parser.add_argument('--data_type', choices=['coco', 'rvc1', 'tau_histopathology'], help='type of data being evaluated')
 parser.add_argument('--ground_truth', help='file or folder location where ground-truth is kept')
 parser.add_argument('--gt_img_folder', help='folder with all gt images in order of gt_instances')
 parser.add_argument('--det_json', help='filename for detection file to be matched with the ground-truth')
@@ -37,6 +37,7 @@ parser.add_argument('--colour_mode', choices=['gr', 'bo'], default='bo',
                          'bo = blue correct orange incorrect.')
 parser.add_argument('--corner_mode', default='ellipse', choices=['arrow', 'ellipse'],
                     help='what method for drawing corners is to be used')
+parser.add_argument('--segmentation_dir', help='folder with all segmentation masks in order of gt_instances')
 args = parser.parse_args()
 
 # Create save folder
@@ -78,7 +79,7 @@ def load_gt_and_det_data(gt_loc, det_json, data_type):
         gt_instances, gt_class_ids_map = read_files.read_COCO_gt(gt_loc, ret_classes=True)
 
         # output is a generator of lists of DetectionInstance objects (BBox or PBox depending)
-        det_instances = read_files.read_pbox_json(det_json, gt_class_ids_map, override_cov=args.set_cov)
+        det_instances, img_names, class_n = read_files.read_pbox_json(det_json, gt_class_ids_map, override_cov=args.set_cov, get_image_names=True, get_class_names=True)
         class_idxs = [gt_class_ids_map[key] for key in sorted(gt_class_ids_map.keys())]
         class_names = list(sorted(gt_class_ids_map.keys()))
         class_list = [class_names[idx] for idx in np.argsort(class_idxs)]
@@ -86,6 +87,20 @@ def load_gt_and_det_data(gt_loc, det_json, data_type):
         gt_instances = rvc1_gt_loader.SequenceGTLoader(gt_loc)
         det_instances = rvc1_submission_loader.DetSequenceLoader(det_json)
         class_list = rvc1_class_list.CLASSES
+    elif data_type == 'tau_histopathology':
+        gt_instances, gt_class_ids = read_files.read_tau_histopathology_gt(
+            gt_loc, 
+            segmentation_dir=args.segmentation_dir,
+            ret_classes=True, 
+            bbox_gt=False,
+            predictions_json=args.det_json.replace('rvc','yolo')
+        )
+        class_list = list(gt_class_ids.keys())
+        print(class_list)
+        det_filename = args.det_json
+
+        # output is a generator of lists of DetectionInstance objects (BBox or PBox depending on detection)
+        det_instances = read_files.read_pbox_json(det_filename, gt_class_ids, override_cov=args.set_cov)
     else:
         sys.exit("ERROR! Invalid data type provided")
 
@@ -222,6 +237,8 @@ def save_analysis_img(img_name, img_gts, img_dets, img_gt_analysis, img_det_anal
 def main():
     # Load all relevant information for this sequence of information
     # gt and det information
+    with open('order_debug.log', 'w') as f:
+        f.write("image file order \n")
     gt_instances, det_instances, class_list = load_gt_and_det_data(args.ground_truth, args.det_json, args.data_type)
 
     # Analysis info
@@ -237,8 +254,14 @@ def main():
     if len(det_instances) != len(det_analysis):
         sys.exit("ERROR! det_instances and det_analysis are not the same length."
                  "\ndet_instances: {0}, det_analysis: {1}".format(len(det_instances), len(det_analysis)))
-    
-    all_images = sorted(glob.glob(os.path.join(args.gt_img_folder, '*.'+args.img_type)))
+    # Force clear any potential caches
+    plt.close('all')
+
+    # Use recursive glob to find all images in subdirectories
+    all_images = glob.glob(os.path.join(args.gt_img_folder, '**', f'*.{args.img_type}'), recursive=True)
+    all_images = sorted(all_images, key=lambda x: os.path.basename(x))
+    for path in all_images[:5]:
+        print(f"path: {path} -> {os.path.basename(path)}")
     if len(all_images) != len(det_instances):
         sys.exit("ERROR! Ground truth images (--gt_img_folder) and det_instances are not the same length."
                  "\ngt_img_folder: {0}, det_instances: {1}".format(len(all_images), len(det_instances)))
@@ -246,7 +269,6 @@ def main():
     img_data_sequence = zip(all_images,
                             gt_instances, det_instances, gt_analysis, det_analysis)
     # Go over each image and draw appropriate
-    print(args.img_set)
     for img_name, img_gts, img_dets, img_gt_analysis, img_det_analysis in tqdm(img_data_sequence,
                                                                                total=len(gt_analysis),
                                                                                desc='image drawing'
