@@ -1,9 +1,11 @@
 # PDQ Evaluation
+This is a forked repo from a forked repo, with changes to enable running PDQ analysis on predictions for a custom histopathology dataset.
 
+# Original README from forked repo
 This is a fork with some small changes from the original one, also assuming `cocoapi` is a sibling folder. 
 
 
-# Original README
+# Original README from the original repo
 
 Overview
 ========
